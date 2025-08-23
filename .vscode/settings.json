@@ -1,0 +1,63 @@
+{
+    "editor.minimap.enabled": false,
+    "workbench.iconTheme": "material-icon-theme",
+    "tabnine.experimentalAutoImports": true,
+    "[typescript]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "window.title": "\"${rootPath}${separator}${rootName}\"",
+    "[scss]": {
+      "editor.defaultFormatter": "michelemelluso.code-beautifier",
+      "editor.tabSize": 2,
+      "editor.detectIndentation": true,
+      "editor.insertSpaces": true
+    },
+    "[javascript]": {
+      "editor.defaultFormatter": "vscode.typescript-language-features"
+    },
+    "diffEditor.ignoreTrimWhitespace": false,
+    "[json]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "editor.suggestSelection": "first",
+    "vsintellicode.modify.editor.suggestSelection": "automaticallyOverrodeDefaultValue",
+    "[html]": {
+      "editor.defaultFormatter": "vscode.html-language-features"
+    },
+    "[typescriptreact]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "git.suggestSmartCommit": false,
+    "workbench.editorAssociations": [{
+      "viewType": "jupyter-notebook",
+      "filenamePattern": "*.ipynb"
+    }],
+    "[python]": {
+      "editor.defaultFormatter": "ms-python.python"
+    },
+    "workbench.colorTheme": "Default Dark+",
+    "git.ignoreRebaseWarning": true,
+    "blade.format.enable": true,
+    "[blade]": {
+      "editor.defaultFormatter": "shufo.vscode-blade-formatter"
+    },
+    "[jsonc]": {
+      "editor.defaultFormatter": "HookyQR.beautify"
+    },
+    "[postcss]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "[php]": {
+      "editor.defaultFormatter": "bmewburn.vscode-intelephense-client"
+    },
+    "phpserver.router": "",
+    "phpserver.port": 1750,
+    "liveServer.settings.port": 4001,
+    "phpserver.phpPath": "/opt/homebrew/bin/php",
+    "liveSassCompile.settings.formats": [{
+      "format": "expanded",
+      "extensionName": ".css",
+      "savePath": "/html/css/",
+      "savePathReplacementPairs": null
+    }]
+  }

@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /resume-examples/
+Allow: /resume-templates/
+Allow: /jobs/
+Disallow: /login
+Disallow: /u/
+Disallow: /signup
+Disallow: /forgot-password
+Disallow: /rec/
+Disallow: /admin/
+
+Sitemap: https://www.jobi.ai/sitemap.xml
