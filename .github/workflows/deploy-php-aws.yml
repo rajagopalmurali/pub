@@ -281,13 +281,82 @@ jobs:
           fi
         fi
         
-        # Create app directory
-        sudo mkdir -p /var/www/html
+        # Create app directory and clean it if it exists
+        echo "Setting up application directory..."
+        if [ -d "/var/www/html" ]; then
+          echo "Directory /var/www/html exists, cleaning it..."
+          sudo rm -rf /var/www/html/*
+          sudo rm -rf /var/www/html/.* 2>/dev/null || true
+        else
+          echo "Creating directory /var/www/html..."
+          sudo mkdir -p /var/www/html
+        fi
+        
         sudo chown ubuntu:ubuntu /var/www/html
+        sudo chmod 755 /var/www/html
         
         # Clone repository
+        echo "Cloning repository..."
         cd /var/www/html
-        git clone https://github.com/${{ github.repository }}.git .
+        
+        # Verify directory is empty before cloning
+        if [ "$(ls -A)" ]; then
+          echo "ERROR: Directory is not empty after cleaning!"
+          ls -la
+          exit 1
+        fi
+        
+        echo "Directory is empty, proceeding with clone..."
+        
+        # Try to clone with retry mechanism
+        MAX_RETRIES=3
+        for attempt in $(seq 1 $MAX_RETRIES); do
+          echo "Clone attempt $attempt of $MAX_RETRIES..."
+          if git clone https://github.com/${{ github.repository }}.git .; then
+            echo "Git clone successful on attempt $attempt"
+            break
+          else
+            echo "Git clone failed on attempt $attempt"
+            if [ $attempt -eq $MAX_RETRIES ]; then
+              echo "ERROR: Git clone failed after $MAX_RETRIES attempts!"
+              echo "Trying alternative approach..."
+              
+              # Alternative: download as ZIP
+              echo "Downloading repository as ZIP..."
+              curl -L "https://github.com/${{ github.repository }}/archive/refs/heads/main.zip" -o repo.zip
+              if [ -f "repo.zip" ]; then
+                unzip repo.zip
+                # Move contents from the extracted folder
+                mv */.* . 2>/dev/null || true
+                mv */* . 2>/dev/null || true
+                rm -rf repo.zip */
+                echo "Repository extracted from ZIP"
+              else
+                echo "ERROR: Could not download repository as ZIP either!"
+                exit 1
+              fi
+            fi
+            sleep 5
+          fi
+        done
+        
+        # Verify clone was successful
+        if [ ! -d ".git" ] && [ ! -f "composer.json" ] && [ ! -f "index.php" ]; then
+          echo "ERROR: Repository setup failed completely!"
+          ls -la
+          exit 1
+        fi
+        
+        echo "Repository cloned successfully!"
+        echo "Repository contents:"
+        ls -la
+        
+        # Check if we have the expected files
+        if [ ! -f "composer.json" ] && [ ! -f "index.php" ] && [ ! -f ".env.example" ]; then
+          echo "WARNING: Repository doesn't contain expected PHP application files"
+          echo "This might be a different type of repository or the clone didn't work properly"
+          echo "Continuing anyway..."
+        fi
         
         # Install Composer if not exists
         if [ ! -f "/usr/local/bin/composer" ]; then
