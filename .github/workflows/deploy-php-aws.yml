@@ -226,21 +226,60 @@ jobs:
         sudo systemctl start php8.1-fpm
         sudo systemctl enable php8.1-fpm
         
-        # Secure MySQL installation
+        # Secure MySQL installation for MySQL 8.0+
         echo "Securing MySQL installation..."
-        sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root_password_123';"
-        sudo mysql -e "DELETE FROM mysql.user WHERE User='';"
-        sudo mysql -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');"
-        sudo mysql -e "DROP DATABASE IF EXISTS test;"
-        sudo mysql -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
-        sudo mysql -e "FLUSH PRIVILEGES;"
         
-        # Create database and user for the application
-        echo "Creating database and user..."
-        sudo mysql -e "CREATE DATABASE IF NOT EXISTS php_app_db;"
-        sudo mysql -e "CREATE USER IF NOT EXISTS 'php_user'@'localhost' IDENTIFIED BY 'php_password_123';"
-        sudo mysql -e "GRANT ALL PRIVILEGES ON php_app_db.* TO 'php_user'@'localhost';"
-        sudo mysql -e "FLUSH PRIVILEGES;"
+        # Wait for MySQL to be fully ready
+        sleep 10
+        
+        # Try to access MySQL with sudo (no password needed for root with sudo)
+        if sudo mysql -e "SELECT 1;" > /dev/null 2>&1; then
+          echo "MySQL is accessible via sudo"
+          
+          # Create a temporary root password file for secure access
+          echo "Creating temporary MySQL root access..."
+          sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'temp_root_pass_123';"
+          
+          # Now use the password to secure the installation
+          sudo mysql -u root -ptemp_root_pass_123 -e "DELETE FROM mysql.user WHERE User='';"
+          sudo mysql -u root -ptemp_root_pass_123 -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');"
+          sudo mysql -u root -ptemp_root_pass_123 -e "DROP DATABASE IF EXISTS test;"
+          sudo mysql -u root -ptemp_root_pass_123 -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
+          sudo mysql -u root -ptemp_root_pass_123 -e "FLUSH PRIVILEGES;"
+          
+          # Create database and user for the application
+          echo "Creating database and user..."
+          sudo mysql -u root -ptemp_root_pass_123 -e "CREATE DATABASE IF NOT EXISTS php_app_db;"
+          sudo mysql -u root -ptemp_root_pass_123 -e "CREATE USER IF NOT EXISTS 'php_user'@'localhost' IDENTIFIED BY 'php_password_123';"
+          sudo mysql -u root -ptemp_root_pass_123 -e "GRANT ALL PRIVILEGES ON php_app_db.* TO 'php_user'@'localhost';"
+          sudo mysql -u root -ptemp_root_pass_123 -e "FLUSH PRIVILEGES;"
+          
+          # Remove temporary root password (optional security measure)
+          # sudo mysql -u root -ptemp_root_pass_123 -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH auth_socket;"
+          
+        else
+          echo "MySQL is not accessible, trying alternative approach..."
+          
+          # Alternative approach: use mysql_secure_installation script
+          echo "Running mysql_secure_installation..."
+          sudo mysql_secure_installation << EOF
+        y
+        y
+        y
+        y
+        y
+        y
+        EOF
+          
+          # Try to create database and user after securing
+          sleep 5
+          if sudo mysql -u root -e "SELECT 1;" > /dev/null 2>&1; then
+            sudo mysql -e "CREATE DATABASE IF NOT EXISTS php_app_db;"
+            sudo mysql -e "CREATE USER IF NOT EXISTS 'php_user'@'localhost' IDENTIFIED BY 'php_password_123';"
+            sudo mysql -e "GRANT ALL PRIVILEGES ON php_app_db.* TO 'php_user'@'localhost';"
+            sudo mysql -e "FLUSH PRIVILEGES;"
+          fi
+        fi
         
         # Create app directory
         sudo mkdir -p /var/www/html
@@ -261,8 +300,10 @@ jobs:
         composer install --no-dev --optimize-autoloader
         
         # Create .env file with database credentials
+        echo "Creating .env file with database credentials..."
         if [ -f ".env.example" ]; then
           cp .env.example .env
+          echo "Copied .env.example to .env"
         else
           cat > .env << 'ENVEOF'
         APP_NAME="PHP App"
@@ -270,6 +311,7 @@ jobs:
         APP_DEBUG=false
         APP_URL=http://${{ steps.launch-instance.outputs.public_ip }}
         
+        # Database Configuration
         DB_CONNECTION=mysql
         DB_HOST=127.0.0.1
         DB_PORT=3306
@@ -277,10 +319,79 @@ jobs:
         DB_USERNAME=php_user
         DB_PASSWORD=php_password_123
         
+        # Cache and Session Configuration
         CACHE_DRIVER=file
         SESSION_DRIVER=file
         QUEUE_DRIVER=sync
+        
+        # Mail Configuration (if needed)
+        MAIL_MAILER=smtp
+        MAIL_HOST=mailpit
+        MAIL_PORT=1025
+        MAIL_USERNAME=null
+        MAIL_PASSWORD=null
+        MAIL_ENCRYPTION=null
+        MAIL_FROM_ADDRESS="hello@example.com"
+        MAIL_FROM_NAME="${APP_NAME}"
+        
+        # Logging
+        LOG_CHANNEL=stack
+        LOG_DEPRECATIONS_CHANNEL=null
+        LOG_LEVEL=debug
+        
+        # Redis (if needed)
+        REDIS_HOST=127.0.0.1
+        REDIS_PASSWORD=null
+        REDIS_PORT=6379
+        
+        # Queue (if needed)
+        QUEUE_CONNECTION=sync
+        
+        # Session and Cookie
+        SESSION_LIFETIME=120
+        SESSION_SECURE_COOKIE=false
+        
+        # Timezone
+        APP_TIMEZONE=UTC
         ENVEOF
+          echo "Created new .env file"
+        fi
+        
+        # Display .env contents for verification (without sensitive data)
+        echo "=== .env file created successfully ==="
+        echo "Database: php_app_db"
+        echo "Username: php_user"
+        echo "Host: 127.0.0.1"
+        echo "Port: 3306"
+        echo "================================"
+        
+        # Test database connection with the new credentials
+        echo "Testing database connection with new credentials..."
+        if mysql -u php_user -pphp_password_123 -e "USE php_app_db; SELECT 'Database connection successful' as status;" 2>/dev/null; then
+          echo "✓ Database connection test passed"
+        else
+          echo "✗ Database connection test failed"
+          echo "Trying to troubleshoot..."
+          
+          # Check if MySQL service is running
+          sudo systemctl status mysql --no-pager -l
+          
+          # Check if user exists
+          sudo mysql -e "SELECT User, Host FROM mysql.user WHERE User='php_user';" 2>/dev/null || echo "Could not check users"
+          
+          # Try to recreate user if needed
+          sudo mysql -e "DROP USER IF EXISTS 'php_user'@'localhost';" 2>/dev/null || true
+          sudo mysql -e "CREATE USER 'php_user'@'localhost' IDENTIFIED BY 'php_password_123';" 2>/dev/null || true
+          sudo mysql -e "GRANT ALL PRIVILEGES ON php_app_db.* TO 'php_user'@'localhost';" 2>/dev/null || true
+          sudo mysql -e "FLUSH PRIVILEGES;" 2>/dev/null || true
+          
+          # Test again
+          if mysql -u php_user -pphp_password_123 -e "USE php_app_db; SELECT 'Database connection successful' as status;" 2>/dev/null; then
+            echo "✓ Database connection test passed after troubleshooting"
+          else
+            echo "✗ Database connection still failing"
+            exit 1
+          fi
         fi
         
         # Set proper permissions
