@@ -351,6 +351,23 @@ jobs:
         echo "Repository contents:"
         ls -la
         
+        # Detect application type
+        echo "=== APPLICATION TYPE DETECTION ==="
+        if [ -f "artisan" ]; then
+          echo "✓ Laravel application detected (artisan file found)"
+        elif [ -f "composer.json" ]; then
+          echo "✓ Composer-based PHP application detected"
+        elif [ -f "index.php" ]; then
+          echo "✓ Standard PHP application detected (index.php found)"
+        elif [ -f ".env.example" ]; then
+          echo "✓ Environment-based PHP application detected"
+        else
+          echo "⚠️  Unknown application type - no standard PHP files detected"
+          echo "Available files:"
+          find . -maxdepth 1 -type f | head -20
+        fi
+        echo "================================="
+        
         # Check if we have the expected files
         if [ ! -f "composer.json" ] && [ ! -f "index.php" ] && [ ! -f ".env.example" ]; then
           echo "WARNING: Repository doesn't contain expected PHP application files"
@@ -464,17 +481,48 @@ jobs:
         fi
         
         # Set proper permissions
+        echo "Setting file permissions..."
         sudo chown -R www-data:www-data /var/www/html
         sudo chmod -R 755 /var/www/html
-        sudo chmod -R 775 /var/www/html/storage
-        sudo chmod -R 775 /var/www/html/bootstrap/cache
         
-        # Generate application key if needed
+        # Set permissions for Laravel-specific directories if they exist
+        if [ -d "/var/www/html/storage" ]; then
+          echo "Setting storage directory permissions..."
+          sudo chmod -R 775 /var/www/html/storage
+        else
+          echo "Storage directory not found (not a Laravel app or different structure)"
+        fi
+        
+        if [ -d "/var/www/html/bootstrap/cache" ]; then
+          echo "Setting bootstrap/cache directory permissions..."
+          sudo chmod -R 775 /var/www/html/bootstrap/cache
+        else
+          echo "Bootstrap/cache directory not found (not a Laravel app or different structure)"
+        fi
+        
+        # Set permissions for other common writable directories
+        for dir in "logs" "cache" "tmp" "uploads" "public/uploads"; do
+          if [ -d "/var/www/html/$dir" ]; then
+            echo "Setting permissions for $dir directory..."
+            sudo chmod -R 775 "/var/www/html/$dir"
+          else
+            echo "Creating $dir directory (common writable directory)"
+            sudo mkdir -p "/var/www/html/$dir"
+            sudo chown www-data:www-data "/var/www/html/$dir"
+            sudo chmod 775 "/var/www/html/$dir"
+          fi
+        done
+        
+        # Generate application key if needed (Laravel-specific)
         if [ -f "artisan" ]; then
+          echo "Laravel application detected, running Laravel commands..."
           php artisan key:generate --force
           php artisan config:cache
           php artisan route:cache
           php artisan view:cache
+        else
+          echo "No artisan file found (not a Laravel application)"
+          echo "Skipping Laravel-specific commands"
         fi
         
         # Configure nginx
