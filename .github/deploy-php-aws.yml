@@ -1,0 +1,502 @@
+name: Deploy PHP App to AWS EC2
+
+on:
+  workflow_dispatch:  # Manual trigger
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  AWS_REGION: ap-south-1
+  INSTANCE_TYPE: t2.micro
+  KEY_NAME: github-actions-php-key
+  AMI_ID: ami-02d26659fd82cf299
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Create security group
+      id: security-group
+      run: |
+        # Create security group for SSH and web access
+        SG_ID=$(aws ec2 create-security-group \
+          --group-name php-app-sg \
+          --description "Security group for PHP app" \
+          --region ${{ env.AWS_REGION }} \
+          --query 'GroupId' \
+          --output text 2>/dev/null || \
+          aws ec2 describe-security-groups \
+          --group-names php-app-sg \
+          --region ${{ env.AWS_REGION }} \
+          --query 'SecurityGroups[0].GroupId' \
+          --output text)
+        
+        echo "sg_id=$SG_ID" >> $GITHUB_OUTPUT
+        
+        # Add SSH rule (port 22)
+        aws ec2 authorize-security-group-ingress \
+          --group-id $SG_ID \
+          --protocol tcp \
+          --port 22 \
+          --cidr 0.0.0.0/0 \
+          --region ${{ env.AWS_REGION }} 2>/dev/null || true
+        
+        # Add HTTP rule (port 80)
+        aws ec2 authorize-security-group-ingress \
+          --group-id $SG_ID \
+          --protocol tcp \
+          --port 80 \
+          --cidr 0.0.0.0/0 \
+          --region ${{ env.AWS_REGION }} 2>/dev/null || true
+        
+        # Add HTTPS rule (port 443)
+        aws ec2 authorize-security-group-ingress \
+          --group-id $SG_ID \
+          --protocol tcp \
+          --port 443 \
+          --cidr 0.0.0.0/0 \
+          --region ${{ env.AWS_REGION }} 2>/dev/null || true
+        
+        # Add MySQL rule (port 3306) - only for local access
+        aws ec2 authorize-security-group-ingress \
+          --group-id $SG_ID \
+          --protocol tcp \
+          --port 3306 \
+          --source-group $SG_ID \
+          --region ${{ env.AWS_REGION }} 2>/dev/null || true
+        
+        echo "Security group $SG_ID configured with SSH, HTTP, HTTPS, and MySQL access"
+        
+    - name: Create or get key pair
+      id: key-pair
+      run: |
+        # Delete existing key pair if it exists
+        aws ec2 delete-key-pair \
+          --key-name ${{ env.KEY_NAME }} \
+          --region ${{ env.AWS_REGION }} 2>/dev/null || true
+        
+        # Create new key pair with proper format
+        aws ec2 create-key-pair \
+          --key-name ${{ env.KEY_NAME }} \
+          --query 'KeyMaterial' \
+          --output text \
+          --region ${{ env.AWS_REGION }} > ${{ env.KEY_NAME }}.pem
+        
+        # Ensure proper line endings and format
+        sed -i 's/\r$//' ${{ env.KEY_NAME }}.pem
+        
+        # Verify key file was created and has content
+        if [ ! -s "${{ env.KEY_NAME }}.pem" ]; then
+          echo "Error: Key file is empty or not created"
+          exit 1
+        fi
+        
+        # Set proper permissions for the key file
+        chmod 400 ${{ env.KEY_NAME }}.pem
+        
+        # Fix ownership and permissions for SSH client
+        chown runner:docker ${{ env.KEY_NAME }}.pem
+        chmod 600 ${{ env.KEY_NAME }}.pem
+        
+        # Verify key file permissions
+        ls -la ${{ env.KEY_NAME }}.pem
+        
+        # Verify SSH client can read the key
+        echo "Verifying SSH client can read key..."
+        if ssh-keygen -l -f "${{ env.KEY_NAME }}.pem" > /dev/null 2>&1; then
+          echo "✓ SSH client can read the key"
+        else
+          echo "✗ SSH client cannot read the key"
+          exit 1
+        fi
+        
+        echo "Key pair created successfully: ${{ env.KEY_NAME }}.pem"
+        
+    - name: Launch EC2 instance
+      id: launch-instance
+      run: |
+        # Launch EC2 instance with custom security group
+        INSTANCE_ID=$(aws ec2 run-instances \
+          --image-id ${{ env.AMI_ID }} \
+          --count 1 \
+          --instance-type ${{ env.INSTANCE_TYPE }} \
+          --key-name ${{ env.KEY_NAME }} \
+          --security-group-ids ${{ steps.security-group.outputs.sg_id }} \
+          --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=PHP-App},{Key=Project,Value=GitHubActions}]' \
+          --query 'Instances[0].InstanceId' \
+          --output text \
+          --region ${{ env.AWS_REGION }})
+        
+        echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+        
+        # Wait for instance to be running
+        echo "Waiting for instance $INSTANCE_ID to be running..."
+        aws ec2 wait instance-running --instance-ids $INSTANCE_ID --region ${{ env.AWS_REGION }}
+        
+        # Get public IP
+        PUBLIC_IP=$(aws ec2 describe-instances \
+          --instance-ids $INSTANCE_ID \
+          --query 'Reservations[0].Instances[0].PublicIpAddress' \
+          --output text \
+          --region ${{ env.AWS_REGION }})
+        
+        echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+        echo "Instance $INSTANCE_ID is running with public IP: $PUBLIC_IP"
+        
+    - name: Wait for SSH access
+      run: |
+        # Wait for SSH to be available
+        echo "Waiting for SSH access..."
+        echo "Using key file: ${{ env.KEY_NAME }}.pem"
+        echo "Connecting to: ubuntu@${{ steps.launch-instance.outputs.public_ip }}"
+        
+        # Debug: Check key file
+        echo "=== KEY FILE DEBUG INFO ==="
+        echo "Current directory: $(pwd)"
+        echo "Key file path: ${{ env.KEY_NAME }}.pem"
+        echo "Key file exists: $(ls -la ${{ env.KEY_NAME }}.pem 2>/dev/null || echo 'NO')"
+        
+        if [ -f "${{ env.KEY_NAME }}.pem" ]; then
+          echo "Key file size: $(wc -c < ${{ env.KEY_NAME }}.pem) bytes"
+          echo "Key file permissions: $(ls -la ${{ env.KEY_NAME }}.pem)"
+          echo "Key file header (first line):"
+          head -n 1 ${{ env.KEY_NAME }}.pem
+        else
+          echo "ERROR: Key file does not exist!"
+        fi
+        echo "=== END KEY FILE DEBUG ==="
+        
+        for i in {1..30}; do
+          echo "Attempt $i: Trying SSH connection..."
+          
+          # Try SSH with absolute path
+          KEY_PATH="$(pwd)/${{ env.KEY_NAME }}.pem"
+          echo "Using key path: $KEY_PATH"
+          
+          if ssh -v -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$KEY_PATH" ubuntu@${{ steps.launch-instance.outputs.public_ip }} "echo 'SSH ready'"; then
+            echo "SSH access confirmed"
+            break
+          fi
+          echo "Attempt $i: SSH failed, waiting 10 seconds..."
+          sleep 10
+        done
+        
+    - name: Deploy PHP application
+      run: |
+        # Create deployment script
+        cat > deploy-php.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "Starting PHP application deployment..."
+        
+        # Update system
+        sudo apt update -y
+        
+        # Install PHP 8.1 and required extensions
+        sudo apt install -y software-properties-common
+        sudo add-apt-repository ppa:ondrej/php -y
+        sudo apt update -y
+        sudo apt install -y php8.1 php8.1-fpm php8.1-mysql php8.1-xml php8.1-curl php8.1-mbstring php8.1-zip php8.1-gd php8.1-cli php8.1-common
+        
+        # Install nginx
+        sudo apt install -y nginx
+        
+        # Install MySQL
+        sudo apt install -y mysql-server
+        
+        # Start and enable services
+        sudo systemctl start nginx
+        sudo systemctl enable nginx
+        sudo systemctl start mysql
+        sudo systemctl enable mysql
+        sudo systemctl start php8.1-fpm
+        sudo systemctl enable php8.1-fpm
+        
+        # Secure MySQL installation
+        echo "Securing MySQL installation..."
+        sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root_password_123';"
+        sudo mysql -e "DELETE FROM mysql.user WHERE User='';"
+        sudo mysql -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');"
+        sudo mysql -e "DROP DATABASE IF EXISTS test;"
+        sudo mysql -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
+        sudo mysql -e "FLUSH PRIVILEGES;"
+        
+        # Create database and user for the application
+        echo "Creating database and user..."
+        sudo mysql -e "CREATE DATABASE IF NOT EXISTS php_app_db;"
+        sudo mysql -e "CREATE USER IF NOT EXISTS 'php_user'@'localhost' IDENTIFIED BY 'php_password_123';"
+        sudo mysql -e "GRANT ALL PRIVILEGES ON php_app_db.* TO 'php_user'@'localhost';"
+        sudo mysql -e "FLUSH PRIVILEGES;"
+        
+        # Create app directory
+        sudo mkdir -p /var/www/html
+        sudo chown ubuntu:ubuntu /var/www/html
+        
+        # Clone repository
+        cd /var/www/html
+        git clone https://github.com/${{ github.repository }}.git .
+        
+        # Install Composer if not exists
+        if [ ! -f "/usr/local/bin/composer" ]; then
+          echo "Installing Composer..."
+          curl -sS https://getcomposer.org/installer | sudo php -- --install-dir=/usr/local/bin --filename=composer
+        fi
+        
+        # Install PHP dependencies
+        echo "Installing PHP dependencies..."
+        composer install --no-dev --optimize-autoloader
+        
+        # Create .env file with database credentials
+        if [ -f ".env.example" ]; then
+          cp .env.example .env
+        else
+          cat > .env << 'ENVEOF'
+        APP_NAME="PHP App"
+        APP_ENV=production
+        APP_DEBUG=false
+        APP_URL=http://${{ steps.launch-instance.outputs.public_ip }}
+        
+        DB_CONNECTION=mysql
+        DB_HOST=127.0.0.1
+        DB_PORT=3306
+        DB_DATABASE=php_app_db
+        DB_USERNAME=php_user
+        DB_PASSWORD=php_password_123
+        
+        CACHE_DRIVER=file
+        SESSION_DRIVER=file
+        QUEUE_DRIVER=sync
+        ENVEOF
+        fi
+        
+        # Set proper permissions
+        sudo chown -R www-data:www-data /var/www/html
+        sudo chmod -R 755 /var/www/html
+        sudo chmod -R 775 /var/www/html/storage
+        sudo chmod -R 775 /var/www/html/bootstrap/cache
+        
+        # Generate application key if needed
+        if [ -f "artisan" ]; then
+          php artisan key:generate --force
+          php artisan config:cache
+          php artisan route:cache
+          php artisan view:cache
+        fi
+        
+        # Configure nginx
+        echo "Configuring nginx..."
+        sudo rm -f /etc/nginx/sites-enabled/default
+        
+        sudo tee /etc/nginx/sites-available/php-app > /dev/null << 'NGINXEOF'
+        server {
+            listen 80 default_server;
+            server_name _;
+            root /var/www/html/public;
+            index index.php index.html index.htm;
+            
+            # Security headers
+            add_header X-Frame-Options "SAMEORIGIN" always;
+            add_header X-XSS-Protection "1; mode=block" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header Referrer-Policy "no-referrer-when-downgrade" always;
+            add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+            
+            # Handle PHP files
+            location ~ \.php$ {
+                try_files $uri =404;
+                fastcgi_split_path_info ^(.+\.php)(/.+)$;
+                fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+                fastcgi_index index.php;
+                include fastcgi_params;
+                fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+                fastcgi_param PATH_INFO $fastcgi_path_info;
+            }
+            
+            # Handle static files
+            location ~* \.(jpg|jpeg|png|gif|ico|css|js|pdf|txt)$ {
+                expires 1y;
+                add_header Cache-Control "public, immutable";
+            }
+            
+            # Handle Laravel routes
+            location / {
+                try_files $uri $uri/ /index.php?$query_string;
+            }
+            
+            # Deny access to sensitive files
+            location ~ /\. {
+                deny all;
+            }
+            
+            location ~ /\.ht {
+                deny all;
+            }
+            
+            location ~ /\.env {
+                deny all;
+            }
+            
+            location ~ /\.git {
+                deny all;
+            }
+        }
+        NGINXEOF
+        
+        # Enable the site
+        sudo ln -sf /etc/nginx/sites-available/php-app /etc/nginx/sites-enabled/
+        
+        # Test nginx configuration
+        sudo nginx -t
+        
+        # Reload nginx
+        sudo systemctl reload nginx
+        
+        # Verify services are running
+        echo "Verifying services..."
+        sudo systemctl status nginx --no-pager -l
+        sudo systemctl status php8.1-fpm --no-pager -l
+        sudo systemctl status mysql --no-pager -l
+        
+        # Test PHP-FPM
+        echo "Testing PHP-FPM..."
+        if php -v > /dev/null 2>&1; then
+          echo "✓ PHP is working"
+        else
+          echo "✗ PHP is not working"
+          exit 1
+        fi
+        
+        # Test MySQL connection
+        echo "Testing MySQL connection..."
+        if mysql -u php_user -pphp_password_123 -e "SELECT 1;" > /dev/null 2>&1; then
+          echo "✓ MySQL connection is working"
+        else
+          echo "✗ MySQL connection is not working"
+          exit 1
+        fi
+        
+        # Test nginx
+        echo "Testing nginx..."
+        if curl -s http://localhost > /dev/null; then
+          echo "✓ Nginx is responding"
+        else
+          echo "✗ Nginx is not responding"
+          exit 1
+        fi
+        
+        # Show final status
+        echo "=== FINAL STATUS ==="
+        echo "PHP version:"
+        php -v
+        echo ""
+        echo "MySQL status:"
+        sudo systemctl status mysql --no-pager -l
+        echo ""
+        echo "Nginx status:"
+        sudo systemctl status nginx --no-pager -l
+        echo ""
+        echo "PHP-FPM status:"
+        sudo systemctl status php8.1-fpm --no-pager -l
+        echo "=== END STATUS ==="
+        
+        echo "PHP application deployment completed successfully!"
+        echo "Application is running on:"
+        echo "  HTTP:  http://${{ steps.launch-instance.outputs.public_ip }}"
+        echo ""
+        echo "Database credentials:"
+        echo "  Database: php_app_db"
+        echo "  Username: php_user"
+        echo "  Password: php_password_123"
+        echo "  Host: localhost"
+        echo "  Port: 3306"
+        EOF
+        
+        # Make script executable and run it
+        chmod +x deploy-php.sh
+        scp -i ${{ env.KEY_NAME }}.pem -o StrictHostKeyChecking=no deploy-php.sh ubuntu@${{ steps.launch-instance.outputs.public_ip }}:~/
+        ssh -i ${{ env.KEY_NAME }}.pem -o StrictHostKeyChecking=no ubuntu@${{ steps.launch-instance.outputs.public_ip }} "chmod +x ~/deploy-php.sh && ~/deploy-php.sh"
+        
+    - name: Output deployment info
+      run: |
+        echo "🚀 PHP application deployment completed successfully!"
+        echo "📱 Application URL: http://${{ steps.launch-instance.outputs.public_ip }}"
+        echo "🔑 Instance ID: ${{ steps.launch-instance.outputs.instance_id }}"
+        echo "🌍 Region: ${{ env.AWS_REGION }}"
+        echo ""
+        echo "Database Information:"
+        echo "  Database: php_app_db"
+        echo "  Username: php_user"
+        echo "  Password: php_password_123"
+        echo "  Host: localhost (on EC2 instance)"
+        echo ""
+        echo "To access your instance via SSH:"
+        echo "ssh -i ${{ env.KEY_NAME }}.pem ubuntu@${{ steps.launch-instance.outputs.public_ip }}"
+        
+    - name: Cleanup key file
+      if: always()
+      run: rm -f ${{ env.KEY_NAME }}.pem
+
+  cleanup:
+    needs: deploy
+    if: failure()
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Cleanup EC2 instance
+      if: needs.deploy.outputs.instance_id != ''
+      run: |
+        echo "Cleaning up EC2 instance due to job failure..."
+        aws ec2 terminate-instances \
+          --instance-ids ${{ needs.deploy.outputs.instance_id }} \
+          --region ${{ env.AWS_REGION }}
+        
+        echo "Waiting for instance to terminate..."
+        aws ec2 wait instance-terminated \
+          --instance-ids ${{ needs.deploy.outputs.instance_id }} \
+          --region ${{ env.AWS_REGION }}
+        
+        echo "EC2 instance terminated successfully"
+        
+    - name: Cleanup key pair
+      if: always()
+      run: |
+        echo "Cleaning up key pair..."
+        aws ec2 delete-key-pair \
+          --key-name ${{ env.KEY_NAME }} \
+          --region ${{ env.AWS_REGION }} || true
+        
+        echo "Key pair cleanup completed"
+        
+    - name: Cleanup security group
+      if: always()
+      run: |
+        echo "Cleaning up security group..."
+        aws ec2 delete-security-group \
+          --group-name php-app-sg \
+          --region ${{ env.AWS_REGION }} || true
+        
+        echo "Security group cleanup completed"
+        
+    - name: Cleanup completed
+      run: echo "All cleanup operations completed"
