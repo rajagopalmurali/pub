@@ -529,12 +529,89 @@ jobs:
         echo "Configuring nginx..."
         sudo rm -f /etc/nginx/sites-enabled/default
         
+        # Determine the correct root directory based on application type
+        echo "=== DETERMINING NGINX ROOT DIRECTORY ==="
+        
+        # Check what's actually in the directories
+        echo "Contents of /var/www/html:"
+        ls -la /var/www/html/ | head -10
+        
+        if [ -d "/var/www/html/public" ]; then
+          echo "Contents of /var/www/html/public:"
+          ls -la /var/www/html/public/ | head -10
+        fi
+        
+        # Smart root directory detection
+        if [ -d "/var/www/html/public" ] && [ -f "/var/www/html/public/index.php" ]; then
+          NGINX_ROOT="/var/www/html/public"
+          echo "✓ Using Laravel-style public directory: $NGINX_ROOT (index.php found)"
+        elif [ -d "/var/www/html/public" ] && [ -f "/var/www/html/public/index.html" ]; then
+          NGINX_ROOT="/var/www/html/public"
+          echo "✓ Using Laravel-style public directory: $NGINX_ROOT (index.html found)"
+        elif [ -f "/var/www/html/index.php" ]; then
+          NGINX_ROOT="/var/www/html"
+          echo "✓ Using root directory: $NGINX_ROOT (index.php found)"
+        elif [ -f "/var/www/html/index.html" ]; then
+          NGINX_ROOT="/var/www/html"
+          echo "✓ Using root directory: $NGINX_ROOT (index.html found)"
+        else
+          NGINX_ROOT="/var/www/html"
+          echo "⚠️  No index file found, using default root: $NGINX_ROOT"
+        fi
+        
+        echo "Final nginx root directory: $NGINX_ROOT"
+        echo "=========================================="
+        
+        # Create a simple index.php if none exists in the determined root
+        if [ ! -f "$NGINX_ROOT/index.php" ] && [ ! -f "$NGINX_ROOT/index.html" ]; then
+          echo "Creating default index.php file in $NGINX_ROOT..."
+          sudo tee "$NGINX_ROOT/index.php" > /dev/null << 'PHPEOF'
+        <?php
+        echo "<h1>PHP Application Deployed Successfully!</h1>";
+        echo "<p>Server: " . $_SERVER['SERVER_SOFTWARE'] . "</p>";
+        echo "<p>PHP Version: " . phpversion() . "</p>";
+        echo "<p>Document Root: " . $_SERVER['DOCUMENT_ROOT'] . "</p>";
+        echo "<p>Current Directory: " . getcwd() . "</p>";
+        echo "<p>Script Path: " . __FILE__ . "</p>";
+        echo "<h2>Directory Contents:</h2>";
+        echo "<pre>";
+        $files = scandir('.');
+        foreach ($files as $file) {
+            if ($file != '.' && $file != '..') {
+                $type = is_dir($file) ? 'DIR' : 'FILE';
+                echo "$type: $file\n";
+            }
+        }
+        echo "</pre>";
+        echo "<h2>Parent Directory Contents:</h2>";
+        echo "<pre>";
+        $files = scandir('..');
+        foreach ($files as $file) {
+            if ($file != '.' && $file != '..') {
+                $type = is_dir($file) ? 'DIR' : 'FILE';
+                echo "$type: $file\n";
+            }
+        }
+        echo "</pre>";
+        ?>
+        PHPEOF
+          sudo chown www-data:www-data "$NGINX_ROOT/index.php"
+          sudo chmod 644 "$NGINX_ROOT/index.php"
+          echo "✓ Default index.php created in $NGINX_ROOT"
+        else
+          echo "✓ Index file already exists in $NGINX_ROOT"
+        fi
+        
         sudo tee /etc/nginx/sites-available/php-app > /dev/null << 'NGINXEOF'
         server {
             listen 80 default_server;
             server_name _;
-            root /var/www/html/public;
+            root REPLACE_ROOT_PATH;
             index index.php index.html index.htm;
+            
+            # Enable access logging for debugging
+            access_log /var/log/nginx/php-app-access.log;
+            error_log /var/log/nginx/php-app-error.log;
             
             # Security headers
             add_header X-Frame-Options "SAMEORIGIN" always;
@@ -552,6 +629,9 @@ jobs:
                 include fastcgi_params;
                 fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
                 fastcgi_param PATH_INFO $fastcgi_path_info;
+                
+                # Enable error logging for PHP
+                fastcgi_intercept_errors on;
             }
             
             # Handle static files
@@ -560,7 +640,7 @@ jobs:
                 add_header Cache-Control "public, immutable";
             }
             
-            # Handle Laravel routes
+            # Handle routes (Laravel-style or standard)
             location / {
                 try_files $uri $uri/ /index.php?$query_string;
             }
@@ -581,17 +661,120 @@ jobs:
             location ~ /\.git {
                 deny all;
             }
+            
+            # Custom error pages
+            error_page 403 /403.html;
+            error_page 404 /404.html;
+            error_page 500 /500.html;
         }
         NGINXEOF
         
+        # Replace the placeholder with actual root path
+        sudo sed -i "s|REPLACE_ROOT_PATH|$NGINX_ROOT|g" /etc/nginx/sites-available/php-app
+        
+        # Verify the replacement worked
+        echo "=== NGINX CONFIGURATION VERIFICATION ==="
+        echo "Checking nginx configuration file:"
+        sudo grep "root" /etc/nginx/sites-available/php-app
+        
         # Enable the site
         sudo ln -sf /etc/nginx/sites-available/php-app /etc/nginx/sites-enabled/
+        
+        # Double-check the enabled site
+        echo "Checking enabled site configuration:"
+        sudo grep "root" /etc/nginx/sites-enabled/php-app
+        
+        echo "======================================="
         
         # Test nginx configuration
         sudo nginx -t
         
         # Reload nginx
         sudo systemctl reload nginx
+        
+        # Comprehensive troubleshooting and verification
+        echo "=== TROUBLESHOOTING AND VERIFICATION ==="
+        
+        # Check nginx configuration
+        echo "1. Nginx configuration test:"
+        sudo nginx -t
+        
+        # Check nginx status
+        echo "2. Nginx service status:"
+        sudo systemctl status nginx --no-pager -l
+        
+        # Check PHP-FPM status
+        echo "3. PHP-FPM service status:"
+        sudo systemctl status php8.1-fpm --no-pager -l
+        
+        # Check file permissions
+        echo "4. File permissions check:"
+        echo "Root directory: $NGINX_ROOT"
+        ls -la "$NGINX_ROOT" | head -10
+        
+        # Check if index file exists
+        echo "5. Index file check:"
+        if [ -f "$NGINX_ROOT/index.php" ]; then
+          echo "✓ index.php exists at $NGINX_ROOT/index.php"
+        elif [ -f "$NGINX_ROOT/index.html" ]; then
+          echo "✓ index.html exists at $NGINX_ROOT/index.html"
+        else
+          echo "✗ No index file found in $NGINX_ROOT"
+        fi
+        
+        # Check nginx error logs
+        echo "6. Recent nginx error logs:"
+        sudo tail -20 /var/log/nginx/error.log 2>/dev/null || echo "No error log found"
+        
+        # Check PHP-FPM logs
+        echo "7. Recent PHP-FPM logs:"
+        sudo tail -20 /var/log/php8.1-fpm.log 2>/dev/null || echo "No PHP-FPM log found"
+        
+        # Test local access
+        echo "8. Testing local access:"
+        if curl -s http://localhost > /dev/null; then
+          echo "✓ Nginx responds locally"
+          echo "Response content (first 500 chars):"
+          curl -s http://localhost | head -c 500
+          echo ""
+        else
+          echo "✗ Nginx doesn't respond locally"
+          echo "Response:"
+          curl -v http://localhost 2>&1 | head -20
+        fi
+        
+        # Test the specific root directory
+        echo "9. Testing root directory access:"
+        echo "Current nginx root: $NGINX_ROOT"
+        if [ -f "$NGINX_ROOT/index.php" ]; then
+          echo "✓ Index file exists at $NGINX_ROOT/index.php"
+          echo "File permissions:"
+          ls -la "$NGINX_ROOT/index.php"
+        else
+          echo "✗ No index file found at $NGINX_ROOT/index.php"
+        fi
+        
+        # Check PHP processing
+        echo "10. Testing PHP processing:"
+        if [ -f "$NGINX_ROOT/index.php" ]; then
+          if php -l "$NGINX_ROOT/index.php" > /dev/null 2>&1; then
+            echo "✓ PHP syntax is valid"
+          else
+            echo "✗ PHP syntax error in index.php"
+            php -l "$NGINX_ROOT/index.php"
+          fi
+        fi
+        
+        # Check socket file
+        echo "11. PHP-FPM socket check:"
+        if [ -S "/var/run/php/php8.1-fpm.sock" ]; then
+          echo "✓ PHP-FPM socket exists"
+          ls -la /var/run/php/php8.1-fpm.sock
+        else
+          echo "✗ PHP-FPM socket not found"
+        fi
+        
+        echo "=== END TROUBLESHOOTING ==="
         
         # Verify services are running
         echo "Verifying services..."
