@@ -197,7 +197,7 @@ jobs:
     - name: Deploy PHP application
       run: |
         # Create deployment script
-        cat > deploy-php.sh << 'EOF'
+        cat > deploy-php.sh << 'DEPLOY_SCRIPT_EOF'
         #!/bin/bash
         set -e
         
@@ -262,14 +262,14 @@ jobs:
           
           # Alternative approach: use mysql_secure_installation script
           echo "Running mysql_secure_installation..."
-          sudo mysql_secure_installation << EOF
+          sudo mysql_secure_installation << MYSQL_SECURE_EOF
         y
         y
         y
         y
         y
         y
-        EOF
+        MYSQL_SECURE_EOF
           
           # Try to create database and user after securing
           sleep 5
@@ -534,7 +534,7 @@ jobs:
         echo "  Password: php_password_123"
         echo "  Host: localhost"
         echo "  Port: 3306"
-        EOF
+        DEPLOY_SCRIPT_EOF
         
         # Make script executable and run it
         chmod +x deploy-php.sh
