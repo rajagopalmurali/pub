@@ -62,10 +62,10 @@ jobs:
           .github/workflows/scripts/create-index.sh \
           ubuntu@${{ steps.aws-setup.outputs.public_ip }}:~/
         
-        # Run deployment scripts
+        # Run deployment scripts with environment variables
         ssh -i ${{ env.KEY_NAME }}.pem -o StrictHostKeyChecking=no \
           ubuntu@${{ steps.aws-setup.outputs.public_ip }} \
-          "chmod +x ~/deploy-php.sh ~/create-index.sh && ~/deploy-php.sh && ~/create-index.sh"
+          "export GITHUB_REPOSITORY='${{ github.repository }}' && export PUBLIC_IP='${{ steps.aws-setup.outputs.public_ip }}' && chmod +x ~/deploy-php.sh ~/create-index.sh && ~/deploy-php.sh && ~/create-index.sh"
         
     - name: Output deployment info
       run: |
