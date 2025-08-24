@@ -58,14 +58,13 @@ jobs:
       run: |
         # Copy deployment scripts to instance
         scp -i ${{ env.KEY_NAME }}.pem -o StrictHostKeyChecking=no \
-          .github/workflows/scripts/deploy-php.sh \
-          .github/workflows/scripts/create-index.sh \
+          .github/workflows/scripts/deploy-php-simple.sh \
           ubuntu@${{ steps.aws-setup.outputs.public_ip }}:~/
         
-        # Run deployment scripts with environment variables
+        # Run simple deployment script (no database connection needed)
         ssh -i ${{ env.KEY_NAME }}.pem -o StrictHostKeyChecking=no \
           ubuntu@${{ steps.aws-setup.outputs.public_ip }} \
-          "export GITHUB_REPOSITORY='${{ github.repository }}' && export PUBLIC_IP='${{ steps.aws-setup.outputs.public_ip }}' && chmod +x ~/deploy-php.sh ~/create-index.sh && ~/deploy-php.sh && ~/create-index.sh"
+          "chmod +x ~/deploy-php-simple.sh && ~/deploy-php-simple.sh"
         
     - name: Output deployment info
       run: |

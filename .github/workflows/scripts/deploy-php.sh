@@ -123,10 +123,34 @@ sudo chmod -R 755 /var/www/html
 # Laravel specific commands
 if [ -f "artisan" ]; then
   echo "Laravel application detected, running Laravel commands..."
+  
+  # Generate application key
   php artisan key:generate --force
+  
+  # Run database migrations
+  echo "Running database migrations..."
+  php artisan migrate --force
+  
+  # Run database seeders if they exist
+  if php artisan list | grep -q "db:seed"; then
+    echo "Running database seeders..."
+    php artisan db:seed --force
+  else
+    echo "No database seeders found, skipping..."
+  fi
+  
+  # Clear and cache configurations
+  php artisan config:clear
   php artisan config:cache
+  php artisan route:clear
+  php artisan route:cache
+  php artisan view:clear
+  php artisan view:cache
+  
+  echo "Laravel setup completed successfully!"
 else
   echo "No artisan file found (not a Laravel application)"
+  echo "Skipping Laravel-specific commands"
 fi
 
 # Configure nginx
@@ -180,3 +204,64 @@ echo "Reloading nginx..."
 sudo systemctl reload nginx
 
 echo "PHP application deployment completed successfully!"
+
+# Test database connection
+echo "Testing database connection..."
+if mysql -u php_user -pphp_password_123 -e "USE php_app_db; SELECT 'Database connection successful' as status;" 2>/dev/null; then
+  echo "✅ Database connection test passed"
+else
+  echo "❌ Database connection test failed"
+  echo "Trying to troubleshoot database connection..."
+  
+  # Check MySQL service status
+  sudo systemctl status mysql --no-pager -l
+  
+  # Check if user exists and has proper permissions
+  sudo mysql -e "SELECT User, Host FROM mysql.user WHERE User='php_user';" 2>/dev/null || echo "Could not check users"
+  
+  # Try to recreate user if needed
+  sudo mysql -e "DROP USER IF EXISTS 'php_user'@'localhost';" 2>/dev/null || true
+  sudo mysql -e "CREATE USER IF NOT EXISTS 'php_user'@'localhost' IDENTIFIED BY 'php_password_123';" 2>/dev/null || true
+  sudo mysql -e "GRANT ALL PRIVILEGES ON php_app_db.* TO 'php_user'@'localhost';" 2>/dev/null || true
+  sudo mysql -e "FLUSH PRIVILEGES;" 2>/dev/null || true
+  
+  # Test again
+  if mysql -u php_user -pphp_password_123 -e "USE php_app_db; SELECT 'Database connection successful' as status;" 2>/dev/null; then
+    echo "✅ Database connection test passed after troubleshooting"
+  else
+    echo "❌ Database connection still failing after troubleshooting"
+    exit 1
+  fi
+fi
+
+# Test PHP-FPM
+echo "Testing PHP-FPM..."
+if php -v > /dev/null 2>&1; then
+  echo "✅ PHP is working"
+else
+  echo "❌ PHP is not working"
+  exit 1
+fi
+
+# Test nginx
+echo "Testing nginx..."
+if curl -s http://localhost > /dev/null; then
+  echo "✅ Nginx is responding"
+else
+  echo "❌ Nginx is not responding"
+  exit 1
+fi
+
+echo "=== FINAL STATUS ==="
+echo "PHP version:"
+php -v
+echo ""
+echo "MySQL status:"
+sudo systemctl status mysql --no-pager -l
+echo ""
+echo "Nginx status:"
+sudo systemctl status nginx --no-pager -l
+echo ""
+echo "PHP-FPM status:"
+sudo systemctl status php8.1-fpm --no-pager -l
+echo "=== END STATUS ==="
