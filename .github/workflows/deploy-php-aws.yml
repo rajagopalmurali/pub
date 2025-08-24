@@ -562,10 +562,12 @@ jobs:
         echo "Final nginx root directory: $NGINX_ROOT"
         echo "=========================================="
         
-        # Create a simple index.php if none exists in the determined root
-        if [ ! -f "$NGINX_ROOT/index.php" ] && [ ! -f "$NGINX_ROOT/index.html" ]; then
-          echo "Creating default index.php file in $NGINX_ROOT..."
-          sudo tee "$NGINX_ROOT/index.php" > /dev/null << 'PHPEOF'
+        # Force create index.php in the determined root directory
+        echo "Creating index.php file in $NGINX_ROOT..."
+        sudo rm -f "$NGINX_ROOT/index.php" 2>/dev/null || true
+        sudo rm -f "$NGINX_ROOT/index.html" 2>/dev/null || true
+        
+        sudo tee "$NGINX_ROOT/index.php" > /dev/null << 'PHPEOF'
         <?php
         echo "<h1>PHP Application Deployed Successfully!</h1>";
         echo "<p>Server: " . $_SERVER['SERVER_SOFTWARE'] . "</p>";
@@ -573,6 +575,7 @@ jobs:
         echo "<p>Document Root: " . $_SERVER['DOCUMENT_ROOT'] . "</p>";
         echo "<p>Current Directory: " . getcwd() . "</p>";
         echo "<p>Script Path: " . __FILE__ . "</p>";
+        echo "<p>Timestamp: " . date('Y-m-d H:i:s') . "</p>";
         echo "<h2>Directory Contents:</h2>";
         echo "<pre>";
         $files = scandir('.');
@@ -593,13 +596,29 @@ jobs:
             }
         }
         echo "</pre>";
+        echo "<h2>PHP Info:</h2>";
+        echo "<pre>";
+        echo "PHP_SAPI: " . php_sapi_name() . "\n";
+        echo "Loaded Extensions: " . implode(', ', get_loaded_extensions()) . "\n";
+        echo "</pre>";
         ?>
         PHPEOF
-          sudo chown www-data:www-data "$NGINX_ROOT/index.php"
-          sudo chmod 644 "$NGINX_ROOT/index.php"
-          echo "✓ Default index.php created in $NGINX_ROOT"
+        
+        # Set proper permissions and ownership
+        sudo chown www-data:www-data "$NGINX_ROOT/index.php"
+        sudo chmod 644 "$NGINX_ROOT/index.php"
+        
+        # Verify the file was created
+        if [ -f "$NGINX_ROOT/index.php" ]; then
+          echo "✓ Index.php created successfully in $NGINX_ROOT"
+          echo "File details:"
+          ls -la "$NGINX_ROOT/index.php"
+          echo "File contents (first 200 chars):"
+          head -c 200 "$NGINX_ROOT/index.php"
+          echo ""
         else
-          echo "✓ Index file already exists in $NGINX_ROOT"
+          echo "✗ Failed to create index.php in $NGINX_ROOT"
+          exit 1
         fi
         
         sudo tee /etc/nginx/sites-available/php-app > /dev/null << 'NGINXEOF'
@@ -677,6 +696,20 @@ jobs:
         echo "Checking nginx configuration file:"
         sudo grep "root" /etc/nginx/sites-available/php-app
         
+        # Ensure the root directory has correct permissions
+        echo "Setting correct permissions for web root..."
+        sudo chown -R www-data:www-data "$NGINX_ROOT"
+        sudo chmod -R 755 "$NGINX_ROOT"
+        sudo find "$NGINX_ROOT" -type f -exec chmod 644 {} \;
+        sudo find "$NGINX_ROOT" -type d -exec chmod 755 {} \;
+        
+        # Special permissions for index.php
+        if [ -f "$NGINX_ROOT/index.php" ]; then
+          sudo chmod 644 "$NGINX_ROOT/index.php"
+          sudo chown www-data:www-data "$NGINX_ROOT/index.php"
+          echo "✓ Set special permissions for index.php"
+        fi
+        
         # Enable the site
         sudo ln -sf /etc/nginx/sites-available/php-app /etc/nginx/sites-enabled/
         
@@ -732,15 +765,26 @@ jobs:
         
         # Test local access
         echo "8. Testing local access:"
-        if curl -s http://localhost > /dev/null; then
-          echo "✓ Nginx responds locally"
-          echo "Response content (first 500 chars):"
-          curl -s http://localhost | head -c 500
+        echo "Testing web access to localhost..."
+        
+        # Wait a moment for nginx to fully reload
+        sleep 3
+        
+        # Test with verbose output
+        HTTP_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}\nTIME:%{time_total}s" http://localhost)
+        HTTP_CODE=$(echo "$HTTP_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+        RESPONSE_TIME=$(echo "$HTTP_RESPONSE" | grep "TIME:" | cut -d: -f2)
+        RESPONSE_CONTENT=$(echo "$HTTP_RESPONSE" | grep -v "HTTP_CODE:" | grep -v "TIME:")
+        
+        if [ "$HTTP_CODE" = "200" ]; then
+          echo "✓ Nginx responds successfully (HTTP $HTTP_CODE) in ${RESPONSE_TIME}s"
+          echo "Response content (first 1000 chars):"
+          echo "$RESPONSE_CONTENT" | head -c 1000
           echo ""
         else
-          echo "✗ Nginx doesn't respond locally"
-          echo "Response:"
-          curl -v http://localhost 2>&1 | head -20
+          echo "✗ Nginx error (HTTP $HTTP_CODE) in ${RESPONSE_TIME}s"
+          echo "Full response:"
+          curl -v http://localhost 2>&1
         fi
         
         # Test the specific root directory
