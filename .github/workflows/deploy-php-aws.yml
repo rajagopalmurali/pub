@@ -56,10 +56,16 @@ jobs:
         GITHUB_REPOSITORY: ${{ github.repository }}
         PUBLIC_IP: ${{ steps.aws-setup.outputs.public_ip }}
       run: |
-        # Copy deployment scripts to instance
+        # Copy deployment scripts and SSH key to instance
         scp -i ${{ env.KEY_NAME }}.pem -o StrictHostKeyChecking=no \
           .github/workflows/scripts/deploy-php-simple.sh \
+          .github/workflows/keys/github-actions.pub \
           ubuntu@${{ steps.aws-setup.outputs.public_ip }}:~/
+        
+        # Copy SSH key to /tmp on the server for the deployment script to use
+        ssh -i ${{ env.KEY_NAME }}.pem -o StrictHostKeyChecking=no \
+          ubuntu@${{ steps.aws-setup.outputs.public_ip }} \
+          "sudo cp ~/github-actions.pub /tmp/github-actions.pub"
         
         # Run simple deployment script (no database connection needed)
         ssh -i ${{ env.KEY_NAME }}.pem -o StrictHostKeyChecking=no \
@@ -79,8 +85,12 @@ jobs:
         echo "  Password: php_password_123"
         echo "  Host: localhost (on EC2 instance)"
         echo ""
-        echo "To access your instance via SSH:"
-        echo "ssh -i ${{ env.KEY_NAME }}.pem ubuntu@${{ steps.aws-setup.outputs.public_ip }}"
+        echo "SSH Access Information:"
+        echo "  Temporary access (GitHub Actions key):"
+        echo "    ssh -i ${{ env.KEY_NAME }}.pem ubuntu@${{ steps.aws-setup.outputs.public_ip }}"
+        echo "  Permanent access (added to authorized_keys):"
+        echo "    ssh -i .github/workflows/keys/github-actions ubuntu@${{ steps.aws-setup.outputs.public_ip }}"
+        echo "    Note: You'll need the corresponding private key file"
         
     - name: Cleanup key file
       if: always()

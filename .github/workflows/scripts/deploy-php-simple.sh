@@ -211,6 +211,29 @@ else
   echo "❌ Application is not responding"
 fi
 
+# Setup SSH access with authorized key
+echo "Setting up SSH access with authorized key..."
+if [ -f "/tmp/github-actions.pub" ]; then
+  echo "Adding SSH public key to authorized_keys..."
+  
+  # Create .ssh directory if it doesn't exist
+  sudo mkdir -p /home/ubuntu/.ssh
+  sudo chown ubuntu:ubuntu /home/ubuntu/.ssh
+  sudo chmod 700 /home/ubuntu/.ssh
+  
+  # Add the public key to authorized_keys
+  sudo cat /tmp/github-actions.pub >> /home/ubuntu/.ssh/authorized_keys
+  
+  # Set proper permissions
+  sudo chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
+  sudo chmod 600 /home/ubuntu/.ssh/authorized_keys
+  
+  echo "✅ SSH public key added to authorized_keys"
+  echo "You can now SSH to this server using the corresponding private key"
+else
+  echo "⚠️  No SSH public key found, skipping SSH setup"
+fi
+
 echo "=== FINAL STATUS ==="
 echo "PHP version:"
 php -v
