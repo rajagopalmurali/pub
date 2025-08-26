@@ -67,10 +67,10 @@ jobs:
           ubuntu@${{ steps.aws-setup.outputs.public_ip }} \
           "sudo cp ~/github-actions.pub /tmp/github-actions.pub"
         
-        # Run simple deployment script (no database connection needed)
+        # Run simple deployment script with environment variables
         ssh -i ${{ env.KEY_NAME }}.pem -o StrictHostKeyChecking=no \
           ubuntu@${{ steps.aws-setup.outputs.public_ip }} \
-          "chmod +x ~/deploy-php-simple.sh && ~/deploy-php-simple.sh"
+          "export GITHUB_REPOSITORY='${{ github.repository }}' && export PUBLIC_IP='${{ steps.aws-setup.outputs.public_ip }}' && chmod +x ~/deploy-php-simple.sh && ~/deploy-php-simple.sh"
         
     - name: Output deployment info
       run: |
