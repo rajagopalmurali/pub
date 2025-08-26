@@ -27,129 +27,112 @@ echo "Setting up fresh application directory..."
 sudo rm -rf /var/www/html/*
 sudo chown ubuntu:ubuntu /var/www/html
 
-# Create a simple Hello World PHP application that will definitely work
-echo "Creating simple Hello World PHP application..."
+# Clone and deploy the actual application
+echo "Deploying application from repository..."
 cd /var/www/html
 
-cat > index.php << 'PHPEOF'
-<?php
-// Simple Hello World app - no database connections, no complex logic
-echo "<!DOCTYPE html>";
-echo "<html lang='en'>";
-echo "<head>";
-echo "    <meta charset='UTF-8'>";
-echo "    <meta name='viewport' content='width=device-width, initial-scale=1.0'>";
-echo "    <title>PHP App Working!</title>";
-echo "    <style>";
-echo "        body {";
-echo "            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;";
-echo "            margin: 0;";
-echo "            padding: 0;";
-echo "            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);";
-echo "            min-height: 100vh;";
-echo "            display: flex;";
-echo "            align-items: center;";
-echo "            justify-content: center;";
-echo "        }";
-echo "        .container {";
-echo "            background: white;";
-echo "            padding: 40px;";
-echo "            border-radius: 20px;";
-echo "            box-shadow: 0 20px 40px rgba(0,0,0,0.1);";
-echo "            text-align: center;";
-echo "            max-width: 600px;";
-echo "            margin: 20px;";
-echo "        }";
-echo "        h1 {";
-echo "            color: #2c3e50;";
-echo "            margin-bottom: 20px;";
-echo "            font-size: 2.5em;";
-echo "        }";
-echo "        .success {";
-echo "            color: #27ae60;";
-echo "            font-weight: bold;";
-echo "            font-size: 1.2em;";
-echo "            margin: 20px 0;";
-echo "        }";
-echo "        .info {";
-echo "            background: #f8f9fa;";
-echo "            padding: 20px;";
-echo "            border-radius: 10px;";
-echo "            margin: 20px 0;";
-echo "            text-align: left;";
-echo "        }";
-echo "        .status {";
-echo "            display: inline-block;";
-echo "            padding: 8px 16px;";
-echo "            border-radius: 20px;";
-echo "            font-size: 0.9em;";
-echo "            margin: 5px;";
-echo "        }";
-echo "        .status.ok { background: #d4edda; color: #155724; }";
-echo "        .status.info { background: #d1ecf1; color: #0c5460; }";
-echo "        .php-info {";
-echo "            background: #e9ecef;";
-echo "            padding: 15px;";
-echo "            border-radius: 8px;";
-echo "            margin: 15px 0;";
-echo "            font-family: monospace;";
-echo "            font-size: 0.9em;";
-echo "        }";
-echo "    </style>";
-echo "</head>";
-echo "<body>";
-echo "    <div class='container'>";
-echo "        <h1>🚀 PHP Application Working!</h1>";
-echo "        <div class='success'>✅ No more 500 errors!</div>";
-echo "        <div class='success'>✅ Hello World is running successfully!</div>";
-echo "        ";
-echo "        <div class='info'>";
-echo "            <h3>📊 System Information:</h3>";
-echo "            <div class='status ok'>Server: " . $_SERVER['SERVER_SOFTWARE'] . "</div>";
-echo "            <div class='status ok'>PHP Version: " . phpversion() . "</div>";
-echo "            <div class='status ok'>Document Root: " . $_SERVER['DOCUMENT_ROOT'] . "</div>";
-echo "            <div class='status ok'>Timestamp: " . date('Y-m-d H:i:s') . "</div>";
-echo "        </div>";
-echo "        ";
-echo "        <div class='info'>";
-echo "            <h3>🔧 PHP Extensions:</h3>";
-echo "            <div class='php-info'>";
-echo "                <?php";
-echo "                \$core_extensions = ['mysql', 'mysqli', 'pdo', 'pdo_mysql', 'curl', 'json', 'mbstring', 'xml'];";
-echo "                foreach (\$core_extensions as \$ext) {";
-echo "                    \$status = extension_loaded(\$ext) ? '✅' : '❌';";
-echo "                    echo \"\$status \$ext<br>\";";
-echo "                }";
-echo "                ?>";
-echo "            </div>";
-echo "        </div>";
-echo "        ";
-echo "        <div class='info'>";
-echo "            <h3>📁 Directory Contents:</h3>";
-echo "            <div class='php-info'>";
-echo "                <?php";
-echo "                \$files = scandir('.');";
-echo "                foreach (\$files as \$file) {";
-echo "                    if (\$file != '.' && \$file != '..') {";
-echo "                        \$type = is_dir(\$file) ? '📁' : '📄';";
-echo "                        echo \"\$type \$file<br>\";";
-echo "                    }";
-echo "                }";
-echo "                ?>";
-echo "            </div>";
-echo "        </div>";
-echo "        ";
-echo "        <div class='success'>";
-echo "            <p>🎉 Your PHP environment is working perfectly!</p>";
-echo "            <p>MySQL is set up but not connected - no database errors!</p>";
-echo "        </div>";
-echo "    </div>";
-echo "</body>";
-echo "</html>";
-?>
-PHPEOF
+if [ -z "$GITHUB_REPOSITORY" ]; then
+  echo "ERROR: GITHUB_REPOSITORY environment variable is not set!"
+  echo "Available environment variables:"
+  env | grep -E "(GITHUB|REPO)" || echo "No GITHUB or REPO variables found"
+  exit 1
+fi
 
-echo "✅ Simple PHP application created successfully!"
+echo "Cloning repository: https://github.com/${GITHUB_REPOSITORY}.git"
+
+# Try to clone with retry mechanism
+MAX_RETRIES=3
+for attempt in $(seq 1 $MAX_RETRIES); do
+  echo "Clone attempt $attempt of $MAX_RETRIES..."
+  if git clone "https://github.com/${GITHUB_REPOSITORY}.git" .; then
+    echo "Git clone successful on attempt $attempt"
+    break
+  else
+    echo "Git clone failed on attempt $attempt"
+    if [ $attempt -eq $MAX_RETRIES ]; then
+      echo "ERROR: Git clone failed after $MAX_RETRIES attempts!"
+      echo "Trying alternative approach with ZIP download..."
+      
+      # Alternative: download as ZIP
+      echo "Downloading repository as ZIP..."
+      if curl -L "https://github.com/${GITHUB_REPOSITORY}/archive/refs/heads/main.zip" -o repo.zip; then
+        echo "ZIP download successful, extracting..."
+        unzip repo.zip
+        # Move contents from the extracted folder
+        mv */.* . 2>/dev/null || true
+        mv */* . 2>/dev/null || true
+        rm -rf repo.zip */
+        echo "Repository extracted from ZIP successfully"
+      else
+        echo "ERROR: Could not download repository as ZIP either!"
+        echo "Repository URL: https://github.com/${GITHUB_REPOSITORY}"
+        exit 1
+      fi
+    fi
+    sleep 5
+  fi
+done
+
+# Verify repository setup
+if [ ! -d ".git" ] && [ ! -f "composer.json" ] && [ ! -f "index.php" ]; then
+  echo "ERROR: Repository setup failed completely!"
+  echo "Directory contents:"
+  ls -la
+  exit 1
+fi
+
+echo "Repository setup completed successfully!"
+echo "Application files deployed:"
+ls -la
+
+# Install Composer dependencies if composer.json exists
+if [ -f "composer.json" ]; then
+  echo "Installing PHP dependencies with Composer..."
+  
+  # Install Composer if not exists
+  if [ ! -f "/usr/local/bin/composer" ]; then
+    echo "Installing Composer..."
+    curl -sS https://getcomposer.org/installer | sudo php -- --install-dir=/usr/local/bin --filename=composer
+  fi
+  
+  composer install --no-dev --optimize-autoloader
+  echo "✅ Composer dependencies installed"
+else
+  echo "No composer.json found, skipping Composer dependencies"
+fi
+
+# Handle Laravel applications
+if [ -f "artisan" ]; then
+  echo "Laravel application detected, running Laravel commands..."
+  
+  # Generate application key
+  php artisan key:generate --force
+  
+  # Run database migrations
+  echo "Running database migrations..."
+  php artisan migrate --force
+  
+  # Run database seeders if they exist
+  if php artisan list | grep -q "db:seed"; then
+    echo "Running database seeders..."
+    php artisan db:seed --force
+  else
+    echo "No database seeders found, skipping..."
+  fi
+  
+  # Clear and cache configurations
+  php artisan config:clear
+  php artisan config:cache
+  php artisan route:clear
+  php artisan route:cache
+  php artisan view:clear
+  php artisan view:cache
+  
+  echo "✅ Laravel setup completed successfully!"
+else
+  echo "No artisan file found (not a Laravel application)"
+  echo "Skipping Laravel-specific commands"
+fi
 
 # Set proper permissions
 sudo chown -R www-data:www-data /var/www/html
@@ -159,12 +142,25 @@ sudo chmod -R 755 /var/www/html
 echo "Configuring nginx..."
 sudo rm -f /etc/nginx/sites-enabled/default
 
+# Determine the correct root directory based on application type
+echo "Determining nginx root directory..."
+if [ -d "public" ] && [ -f "public/index.php" ]; then
+  NGINX_ROOT="/var/www/html/public"
+  echo "✅ Using Laravel-style public directory: $NGINX_ROOT"
+elif [ -f "index.php" ]; then
+  NGINX_ROOT="/var/www/html"
+  echo "✅ Using root directory: $NGINX_ROOT"
+else
+  NGINX_ROOT="/var/www/html"
+  echo "⚠️  No index.php found, using default root: $NGINX_ROOT"
+fi
+
 # Create nginx config
 sudo tee /etc/nginx/sites-available/php-app > /dev/null << 'NGINXEOF'
 server {
     listen 80 default_server;
     server_name _;
-    root /var/www/html;
+    root REPLACE_ROOT_PATH;
     index index.php index.html;
     
     # Enable access logging
@@ -190,8 +186,24 @@ server {
         expires 1y;
         add_header Cache-Control "public, immutable";
     }
+    
+    # Deny access to sensitive files
+    location ~ /\. {
+        deny all;
+    }
+    
+    location ~ /\.env {
+        deny all;
+    }
+    
+    location ~ /\.git {
+        deny all;
+    }
 }
 NGINXEOF
+
+# Replace the placeholder with actual root path
+sudo sed -i "s|REPLACE_ROOT_PATH|$NGINX_ROOT|g" /etc/nginx/sites-available/php-app
 
 # Enable the site
 sudo ln -sf /etc/nginx/sites-available/php-app /etc/nginx/sites-enabled/
@@ -405,7 +417,8 @@ echo "PHP-FPM status:"
 sudo systemctl status php8.1-fpm --no-pager -l
 echo "=== END STATUS ==="
 
-echo "🎉 Simple PHP application deployment completed successfully!"
+echo "🎉 Application deployment completed successfully!"
 echo "Your app is now running at: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
-echo "MySQL is set up but not connected to the app - ready for when you need it!"
-echo "✅ No more 500 errors - Hello World is working!"
+echo "Nginx root directory: $NGINX_ROOT"
+echo "MySQL is set up and ready to use!"
+echo "✅ Your application should now load properly!"
