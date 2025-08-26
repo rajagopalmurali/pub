@@ -238,7 +238,8 @@ fi
 echo "Creating .env file with MySQL credentials..."
 cd /var/www/html
 
-cat > .env << 'ENVEOF'
+# Create .env file with proper permissions
+sudo tee .env > /dev/null << 'ENVEOF'
 # MySQL Database Configuration
 DB_CONNECTION=mysql
 DB_HOST=127.0.0.1
@@ -283,7 +284,7 @@ echo "  Root Password: temp_root_pass_123"
 
 # Create database test script
 echo "Creating database test script..."
-cat > db-test.php << 'PHPEOF'
+sudo tee db-test.php > /dev/null << 'PHPEOF'
 <?php
 /**
  * Database Connection Test Script
